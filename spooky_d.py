@@ -14,6 +14,9 @@ import sys
 import math
 from collections import Counter
 from textblob import TextBlob
+from nltk.corpus import stopwords
+
+stop_words = set(stopwords.words('english'))
 
 #import only English dictionary
 eng_dict = enchant.Dict("en_US")
@@ -35,26 +38,32 @@ most_frequently_pattern = {}
 
 list_of_names = []
 
-NGRAMS = 3
+NGRAMS = 5
 
-COUNT_GRAMS = 100
+COUNT_GRAMS = 300
 
 cur_time = time.time()
 
-def find_symbols(line):
-    return sum([1 for x in line if x in [',']]), sum([1 for x in line if x in [';']]),sum([1 for x in line if x in ['?']])
 
-spookyData = pd.DataFrame({'Id': ['id26305','id17569','id11008'], 'comma_freq': 0, 'semicolon_freq': 0,'question':0, 'author':""})
+l_most_grams = {}
+
+keys_author_head = []
+
+
+def find_symbols(line):
+    return sum([1 for x in line if x in [',']]), sum([1 for x in line if x in [';']]),sum([1 for x in line if x in ['?']]),sum([1 for x in line if x in ['-']])
+
+spookyData = pd.DataFrame({'Id': ['id26305','id17569','id11008'], 'comma_freq': 0, 'semicolon_freq': 0,'question':0,'dash':0,'word_mean_len':0, 'author':""})
 
 
 for index_line, line in enumerate(fl):
-    # разбиваем строчку на три строковые переменные
+    # divide into three frames
 
     Id, Sample, Author = line.strip().split('","')
     _,Id = Id.strip().split("\"")
+    Author = re.sub('\"', '', Author)
     Id = str(Id)
-    comma_count, sem_count, quest_count = find_symbols(Sample)
-    list_colums = list(spookyData.columns)
+    comma_count, sem_count, quest_count, dash_count = find_symbols(Sample)
     Sample = re.sub('\"', '', Sample)
     # define part of speech
 
@@ -63,57 +72,73 @@ for index_line, line in enumerate(fl):
 
     Sample = Sample.lower()
 
+    # add sentences in dictionary where keys is authors
     if most_frequently_pattern.get(Author) == None:
         most_frequently_pattern[Author] = []
 
     most_frequently_pattern[Author].append(Sample)
 
 
+    #remove punctuations symbols
+    Sample = re.sub('[.,"?;&]+', '', Sample)
 
-    for names_check in Sample.split():
-        if not eng_dict.check(names_check) and names_check[-1] not in[',',';',':','"', '?','\'','.' , 'Æ',  'Å',  'ç',  'ἶ'] and names_check[0] not in[',',';',':','"', '?','\'','.', 'Æ',  'Å',  'ç',  'ἶ']:
-            if (eng_dict.suggest(names_check) != [] and eng_dict.suggest(names_check)[0][0].islower()) or (len(names_check) >3 and names_check[-3:] == 'ish' or names_check[-2:] == 'in' ):
-                continue
+    #divide in words
+    Sample_chunks = Sample.split()
+
+    word_mean_count = np.mean(list(map(len, Sample_chunks)))
+
+    #remove stop words
+    Sample_chunks = [x for x in Sample_chunks if x not in stop_words]
+
+    #remove short words
+    Sample_chunks = [x for x in Sample_chunks if len(x)>1]
+
+    #remove english_words
+    Sample_chunks = [x for x in Sample_chunks if not eng_dict.check(x)]
+
+    #add new names in table
+    for names_check in Sample_chunks:
+        if (eng_dict.suggest(names_check) != [] and eng_dict.suggest(names_check)[0][0].islower()) or (len(names_check) >3 and names_check[-3:] == 'ish' or names_check[-2:] == 'in' ):
+            continue
+        else:
+            if names_check not in list_of_names:
+                spookyData[names_check] = 0
+                spookyData.loc[index_line,names_check] = 1
+                list_of_names.append(names_check)
             else:
-                #print(names_check)
-                if names_check not in list_colums:
-                    spookyData[names_check] = 0
-                    spookyData.loc[index_line,names_check] = 1
-                    list_of_names.append(names_check)
-                else:
-                    spookyData.loc[index_line, names_check] += 1
+                spookyData.loc[index_line, names_check] += 1
 
     spookyData.loc[index_line, 'Id'] = Id
     spookyData.loc[index_line, 'comma_freq']= comma_count
     spookyData.loc[index_line, 'semicolon_freq']= sem_count
     spookyData.loc[index_line, 'question']=  quest_count
+    spookyData.loc[index_line, 'dash'] = dash_count
+    spookyData.loc[index_line, 'word_mean_len'] = word_mean_count
     spookyData.loc[index_line, 'author']=  Author
+
 
 spookyData.loc[:,(spookyData != 0).any(axis=0)]
 file_name = 'spookyData'
 spookyData.to_csv(file_name, encoding='utf-8')
 print("all_merged")
-sys.exit()
-
-
-spend_time = -cur_time  + time.time()
-print("time spent ", int(spend_time)/60, spend_time%60)
-
-l_most_grams = {}
-
-keys_author_head = []
+print("time in minutes", (-cur_time+time.time())/60)
 
 for keys_author in most_frequently_pattern.keys():
+
     text_author  = ' '.join(str(e) for e in most_frequently_pattern[keys_author])
     text_author = re.sub('\.', ' ', text_author)
-    tokenized = text_author.split()
-    esThreeGrams = ngrams(tokenized, NGRAMS)
-    esThreeFreq = collections.Counter(esThreeGrams)
+
+    # define part of speech
+    text = nltk.word_tokenize(text_author)
+    speech_data = nltk.pos_tag(text)
+    speech_data = [x for _, x in speech_data]
+    speech_dat = [tuple(speech_data[i:i + NGRAMS]) for i in range(len(speech_data) - NGRAMS + 1)]
+    esThreeFreq = collections.Counter(speech_dat)
     l_most_freq = esThreeFreq.most_common(COUNT_GRAMS)
     l_most_freq = [l1[0] for l1 in l_most_freq]
     l_most_grams[keys_author] = l_most_freq
     keys_author_head.append(keys_author)
-    print("keys_author", keys_author)
+
 
 for data_list in l_most_grams[keys_author_head[1]]:
         if (data_list in l_most_grams[keys_author_head[0]]) and (data_list in l_most_grams[keys_author_head[2]]):
@@ -126,23 +151,6 @@ for data_list in l_most_grams[keys_author_head[1]]:
         elif data_list in l_most_grams[keys_author_head[2]]:
             l_most_grams[keys_author_head[2]].remove(data_list)
             l_most_grams[keys_author_head[1]].remove(data_list)
-
-
-
-for data_list in l_most_grams[keys_author_head[1]]:
-        if (data_list in l_most_grams[keys_author_head[0]]) and (data_list in l_most_grams[keys_author_head[2]]):
-            l_most_grams[keys_author_head[0]].remove(data_list)
-            l_most_grams[keys_author_head[1]].remove(data_list)
-            l_most_grams[keys_author_head[2]].remove(data_list)
-
-        elif data_list in l_most_grams[keys_author_head[0]]:
-            l_most_grams[keys_author_head[0]].remove(data_list)
-            l_most_grams[keys_author_head[1]].remove(data_list)
-
-        elif data_list in l_most_grams[keys_author_head[2]]:
-            l_most_grams[keys_author_head[2]].remove(data_list)
-            l_most_grams[keys_author_head[1]].remove(data_list)
-
 
 for data_list in l_most_grams[keys_author_head[1]]:
         if (data_list in l_most_grams[keys_author_head[0]]) and (data_list in l_most_grams[keys_author_head[2]]):
@@ -158,7 +166,19 @@ for data_list in l_most_grams[keys_author_head[1]]:
             l_most_grams[keys_author_head[2]].remove(data_list)
             l_most_grams[keys_author_head[1]].remove(data_list)
 
+for data_list in l_most_grams[keys_author_head[1]]:
+        if (data_list in l_most_grams[keys_author_head[0]]) and (data_list in l_most_grams[keys_author_head[2]]):
+            l_most_grams[keys_author_head[0]].remove(data_list)
+            l_most_grams[keys_author_head[1]].remove(data_list)
+            l_most_grams[keys_author_head[2]].remove(data_list)
 
+        elif data_list in l_most_grams[keys_author_head[0]]:
+            l_most_grams[keys_author_head[0]].remove(data_list)
+            l_most_grams[keys_author_head[1]].remove(data_list)
+
+        elif data_list in l_most_grams[keys_author_head[2]]:
+            l_most_grams[keys_author_head[2]].remove(data_list)
+            l_most_grams[keys_author_head[1]].remove(data_list)
 
 def jaccard_distance(a, b):
     """Calculate the jaccard distance between sets A and B"""
@@ -183,7 +203,7 @@ for author_gram in l_most_grams[keys_author_head[2]]:
     spookyData[author_gram] = 0
     author_all_grams.append(author_gram)
 
-print("author_all_grams",author_all_grams)
+cur_time = time.time()
 
 kl = codecs.open(PATH_TRAIN, 'r','utf-8')
 l = kl.readline()
@@ -195,28 +215,32 @@ for index_line, line in enumerate(kl):
     Id = str(Id)
     #remove all " symbols
     Sample = re.sub('\"', '', Sample)
+    Author = re.sub('\"', '', Author)
+    Sample = Sample.lower()
+    spookyData.loc[index_line, 'author'] = Author
     # define part of speech
-
+    text = nltk.word_tokenize(Sample)
+    speech_data = nltk.pos_tag(text)
+    speech_data = [x for _, x in speech_data]
+    speech_dat = [tuple(speech_data[i:i + NGRAMS]) for i in range(len(speech_data) - NGRAMS + 1)]
     #create new raw in table
 
-    Sample = Sample.lower()
-
-    tokenized = Sample.split()
-    esThreeGrams = list(ngrams(tokenized, NGRAMS))
+    esThreeGrams = speech_dat
 
     for author_gram in author_all_grams:
         s1 = jaccard_distance(esThreeGrams,author_gram)
-        if type(author_gram)!=str:
-            print("boom")
-            author_gram = str(author_gram)
-        print(author_gram)
-        print(esThreeGrams)
-        spookyData.loc[index_line,author_gram] = s1
-        print(index_line,spookyData.loc[index_line,author_gram])
+        spookyData.loc[index_line,author_gram] = float(s1)
+        #print(s1, esThreeGrams,author_gram)
 
-# for train data
 
-spookyTest = pd.DataFrame({'Id': ['id26305','id17569','id11008'], 'comma_freq': 0, 'semicolon_freq': 0,'question':0})
+print("last for  ", time.time()-cur_time)
+
+spookyData.loc[:,(spookyData != 0).any(axis=0)]
+file_name = 'spookyDataModSpeech'
+spookyData.to_csv(file_name, encoding='utf-8')
+
+spookyTest = pd.DataFrame(
+    {'Id': ['id26305', 'id17569', 'id11008'], 'comma_freq': 0, 'semicolon_freq': 0, 'question': 0})
 
 for names in list_of_names:
     spookyTest[names] = 0
@@ -224,81 +248,47 @@ for names in list_of_names:
 for grams in author_all_grams:
     spookyTest[grams] = 0
 
-
-fl = codecs.open(PATH_TEST, 'r','utf-8')
+fl = codecs.open(PATH_TEST, 'r', 'utf-8')
 l = fl.readline()
 
 for index_line, line in enumerate(fl):
     # разбиваем строчку на три строковые переменные
 
-    Id, Sample= line.strip().split('","')
-    _,Id = Id.strip().split("\"")
+    Id, Sample = line.strip().split('","')
+    _, Id = Id.strip().split("\"")
     Id = str(Id)
-    comma_count, sem_count, quest_count = find_symbols(Sample)
+    comma_count, sem_count, quest_count,dash_count = find_symbols(Sample)
     list_colums = list(spookyTest.columns)
-    #remove all " symbols
+    # remove all " symbols
     Sample = re.sub('\"', '', Sample)
     # define part of speech
 
-    #create new raw in table
+    # create new raw in table
     spookyTest.loc[index_line] = 0
 
     Sample = Sample.lower()
 
     for names_check in Sample.split():
         if names_check in list_of_names:
-            spookyTest.loc[index_line, names_check] +=1
+            spookyTest.loc[index_line, names_check] += 1
 
     spookyTest.loc[index_line, 'Id'] = Id
     spookyTest.loc[index_line, 'comma_freq'] = comma_count
     spookyTest.loc[index_line, 'semicolon_freq'] = sem_count
     spookyTest.loc[index_line, 'question'] = quest_count
-
+    spookyTest.loc[index_line, 'dash'] = dash_count
 
     tokenized = Sample.split()
     esThreeGrams = list(ngrams(tokenized, NGRAMS))
 
     for n_grams in author_all_grams:
         s1 = jaccard_distance(esThreeGrams, n_grams)
-        spookyTest.loc[index_line, author_gram] = s1
+        spookyTest.loc[index_line, author_gram] = float(s1)
 
-spend_time = -cur_time  + time.time()
+    Sample = re.sub('[.,"?;&]+', '', Sample)
+    Sample_chunks = Sample.split()
+    word_mean_count = np.mean(list(map(len, Sample_chunks)))
+    spookyTest.loc[index_line, 'word_mean_len'] = word_mean_count
 
-print("time all spent ", int(spend_time)/60, spend_time%60)
+print("all_merged")
 
-spookyData.loc[:, (spookyData != 0).any(axis=0)]
-spookyTest.loc[:, (spookyTest != 0).any(axis=0)]
-
-
-file_name = 'spookyData'
-spookyData.to_csv(file_name, encoding='utf-8')
-
-file_name = 'spookyTest'
-spookyTest.to_csv(file_name, encoding='utf-8')
-
-import numpy as np
-import sklearn
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import explained_variance_score
-predict = [x for x in spookyData.columns if x not in ['index', 'Id', 'author']]
-
-from sklearn.neighbors import KNeighborsClassifier
-knn = KNeighborsClassifier(n_neighbors=3)
-target = 'author'
-
-X_train, X_test, y_train, y_test = train_test_split(spookyData[predict], spookyData[target], test_size = 0.2, random_state = 10)
-
-knn.fit(X_train,y_train)
-dtrain_predict = knn.predict(X_test)
-dtrain_predprob = knn.predict_proba(X_test)
-
-
-#Print model report:
-print("\nModel Report")
-#print("AUC Score (Train): %f" % roc_auc_score(y_test, dtrain_predprob))
-print("Accuracy : %.4g" % accuracy_score(y_test.values, dtrain_predict))
-#print("AUC Score (Train): %f" % roc_auc_score(y_test, dtrain_predprob))
-
-#print(spookyTest)
